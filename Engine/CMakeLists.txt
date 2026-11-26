@@ -1,7 +1,7 @@
-cmake_minimum_required(VERSION 4.4)
+cmake_minimum_required(VERSION 3.24)
 project(Engine)
 
-set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
@@ -43,5 +43,21 @@ target_include_directories(imgui PUBLIC
 target_link_libraries(imgui PUBLIC SDL3::SDL3)
 
 # ---------- Engine ----------
-add_executable(Engine main.cpp)
+# Pick up every source file automatically (re-checked on every build)
+file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/*.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/*.hpp)
+list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/(build|out|cmake-build-[^/]*|\\.vs|\\.idea)/")
+add_executable(Engine ${ENGINE_SOURCES})
+target_include_directories(Engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${ENGINE_SOURCES})
 target_link_libraries(Engine PRIVATE SDL3::SDL3 imgui)
+
+# On Windows, copy SDL3.dll next to Engine.exe so it runs from Visual Studio
+if (WIN32)
+    add_custom_command(TARGET Engine POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:Engine> $<TARGET_FILE_DIR:Engine>
+            COMMAND_EXPAND_LISTS)
+    set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT Engine)
+endif ()

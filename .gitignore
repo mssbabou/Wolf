@@ -1,0 +1,22 @@
+# CMake build output (includes generated .slnx / .vcxproj)
+build/
+out/
+cmake-build-*/
+CMakeUserPresets.json
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# CLion / JetBrains
+.idea/workspace.xml
+.idea/shelf/
+
+# Compiled binaries
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.obj
+*.lib
