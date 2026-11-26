@@ -186,8 +186,8 @@ int main() {
 
             if (auto hit = raycast(currentPos, direction, grid, 50.0f)) 
             {
-                // Temporay size falloff function TO BE REPLACED
-                int sizePixels = static_cast<int>(720.0f / hit->t);
+                float perpDist = hit->t * std::cos(degToRad(angle - currentRotation));
+                int sizePixels = static_cast<int>(720.0f / perpDist);
 
                 SDL_SetRenderDrawColor(renderer, 0, 0, 255 / hit->t, 255);
                 SDL_RenderLine(renderer, i, (720 - sizePixels) / 2, i, ((720 - sizePixels) / 2) + sizePixels);
