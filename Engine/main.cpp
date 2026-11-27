@@ -150,6 +150,10 @@ int main() {
         SDL_Log("Window/renderer failed: %s", SDL_GetError());
         return 1;
     }
+
+    SDL_Texture* tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, 1280, 720);
+    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+
     SDL_SetRenderVSync(renderer, 1);
 
     IMGUI_CHECKVERSION();
@@ -178,6 +182,8 @@ int main() {
     Input input;
 
     Texture wallTexture = *Texture::load("basalt.jpg");
+
+    uint32_t* pixelBuffer = (uint32_t*)malloc(1280 * 720 * sizeof(uint32_t));
 
     bool running = true;
     uint64_t t = 0;
@@ -223,6 +229,8 @@ int main() {
         SDL_SetRenderScale(renderer, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
         SDL_SetRenderDrawColor(renderer, 30, 30, 36, 255);
         SDL_RenderClear(renderer);
+
+        memset(pixelBuffer, 0, 1280 * 720 * sizeof(uint32_t));
         
         float halfFovTan = std::tan(degToRad(horizontalFOV / 2));
         float focal = (1280.0f / 2) / halfFovTan;
@@ -236,20 +244,25 @@ int main() {
             {
                 float perpDist = hit->d * std::cos(degToRad(angle - currentRotation));
                 int sizePixels = static_cast<int>(focal / perpDist);
+                float sizePixelsFloat = static_cast<float>(sizePixels);
+                float distanceFalloff = 1 / hit->d;
+                int startOfColumn = (720 - sizePixels) / 2;
+                int start = (720 - sizePixels) / 2;
+                int pBegin = std::max(0, -start);
+                int pEnd = std::min(sizePixels, 720 - start);
 
-                //if (grid.at(hit->cx, hit->cy) == 1) SDL_SetRenderDrawColor(renderer, 0, 0, 255 / hit->d, 255);
-                //else if (grid.at(hit->cx, hit->cy) == 2) SDL_SetRenderDrawColor(renderer, 255 / hit->d, 0, 0, 255);
-                //SDL_RenderLine(renderer, i, (720 - sizePixels) / 2, i, ((720 - sizePixels) / 2) + sizePixels);
-                
-                for (size_t p = 0; p < sizePixels; p++)
+                for (int p = pBegin; p < pEnd; p++)
                 {
-                    Vec2 texel{ hit->t, static_cast<float>(p) / static_cast<float>(sizePixels)};
-                    Color textureColorSample = wallTexture.sample(texel.x, texel.y) * (1/hit->d);
-                    SDL_SetRenderDrawColor(renderer, textureColorSample.r, textureColorSample.g, textureColorSample.b, textureColorSample.a);
-                    SDL_RenderPoint(renderer, c, p + (720 - sizePixels) / 2);
+                    int y = start + p;
+                    Vec2 texel{ hit->t, static_cast<float>(p) / sizePixelsFloat };
+                    Color textureColorSample = wallTexture.sample(texel.x, texel.y) * distanceFalloff;
+                    pixelBuffer[y * 1280 + c] = textureColorSample.packed();
                 }
             }
         }
+
+        SDL_UpdateTexture(tex, NULL, pixelBuffer, 1280 * sizeof(uint32_t));
+        SDL_RenderTexture(renderer, tex, NULL, NULL);
 
         for (int x = 0; x < WORLD_WIDTH; x++) {
             for (int y = 0; y < WORLD_HEIGHT; y++) {
