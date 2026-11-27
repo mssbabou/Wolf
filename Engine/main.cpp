@@ -11,9 +11,11 @@
 #include <vector>
 #include <numbers>
 
-#define WORLD_WIDTH 4
-#define WORLD_HEIGHT 4
-#define TILE_SIZE 128
+#include "Texture.h"
+
+#define WORLD_WIDTH 16
+#define WORLD_HEIGHT 16
+#define TILE_SIZE 16
 
 struct Input {
     std::array<bool, SDL_SCANCODE_COUNT> prev{}, curr{};
@@ -45,6 +47,7 @@ struct Vec2 {
     float dot(Vec2 o) const { return x * o.x + y * o.y; }
     float cross(Vec2 o) const { return x * o.y - y * o.x; }
     float magnitude() const { return std::sqrt(dot(*this)); }
+    float sqrMagnitude() const { return (dot(*this)); };
     Vec2 normalized() const { float l = magnitude(); return l > 0 ? *this / l : *this; }
     float angleTo(Vec2 o) const {
         return std::atan2(cross(o), dot(o));
@@ -62,6 +65,32 @@ struct Vec2 {
 
 inline Vec2 operator*(float s, Vec2 v) { return v * s; }
 
+static Vec2 WishDir(Vec2 input, Vec2 forward) {
+    forward = forward.normalized();
+    Vec2 right = Vec2(forward.y, -forward.x);
+
+    Vec2 wishDir = forward * input.y + right * input.x;
+    return wishDir.sqrMagnitude() > 0.0f ? wishDir.normalized() : Vec2(0, 0);
+}
+
+static Vec2 Accelerate(Vec2 velocity, Vec2 wishDir, float wishSpeed, float accel, float dt) {
+    float currentSpeed = velocity.dot(wishDir);
+    float addSpeed = wishSpeed - currentSpeed;
+
+    if (addSpeed <= 0.0f) return velocity;
+
+    float accelSpeed = std::min(accel * wishSpeed * dt, addSpeed);
+    return velocity + wishDir * accelSpeed;
+}
+
+static Vec2 ApplyFriction(Vec2 velocity, float friction, float stopSpeed, float dt) {
+    float speed = velocity.magnitude();
+    if (speed < 0.0001f) return Vec2(0, 0);
+
+    float control = std::max(speed, stopSpeed);
+    float newSpeed = std::max(speed - control * friction * dt, 0.0f);
+    return velocity * (newSpeed / speed);
+}
 
 struct Grid {
     int width = 0, height = 0;
@@ -79,27 +108,32 @@ struct Grid {
     bool filled(int x, int y) const { return at(x, y) != 0; }
 };
 
-struct Hit { int cx, cy; float t; bool hitVerticalWall; };
+struct Hit { int cx, cy; float d; bool hitVerticalWall; float t; };
 
-std::optional<Hit> raycast(Vec2 o, Vec2 d, const Grid& g, float maxDist) {
-    int cx = (int)std::floor(o.x), cy = (int)std::floor(o.y);
-    int stepX = d.x > 0 ? 1 : -1;
-    int stepY = d.y > 0 ? 1 : -1;
+std::optional<Hit> raycast(Vec2 origin, Vec2 direction, const Grid& g, float maxDist) {
+    int cx = (int)std::floor(origin.x), cy = (int)std::floor(origin.y);
+    int stepX = direction.x > 0 ? 1 : -1;
+    int stepY = direction.y > 0 ? 1 : -1;
 
-    float tDeltaX = d.x != 0 ? std::abs(1 / d.x) : INFINITY;
-    float tDeltaY = d.y != 0 ? std::abs(1 / d.y) : INFINITY;
+    float tDeltaX = direction.x != 0 ? std::abs(1 / direction.x) : INFINITY;
+    float tDeltaY = direction.y != 0 ? std::abs(1 / direction.y) : INFINITY;
 
-    float tMaxX = (d.x > 0 ? (cx + 1 - o.x) : (o.x - cx)) * tDeltaX;
-    float tMaxY = (d.y > 0 ? (cy + 1 - o.y) : (o.y - cy)) * tDeltaY;
+    float tMaxX = (direction.x > 0 ? (cx + 1 - origin.x) : (origin.x - cx)) * tDeltaX;
+    float tMaxY = (direction.y > 0 ? (cy + 1 - origin.y) : (origin.y - cy)) * tDeltaY;
 
-    float t = 0;
-    while (t <= maxDist) {
+    float d = 0;
+    while (d <= maxDist) {
         bool vertical;
-        if (tMaxX < tMaxY) { cx += stepX; t = tMaxX; tMaxX += tDeltaX; vertical = true; }
-        else { cy += stepY; t = tMaxY; tMaxY += tDeltaY; vertical = false; }
+        if (tMaxX < tMaxY) { cx += stepX; d = tMaxX; tMaxX += tDeltaX; vertical = true; }
+        else { cy += stepY; d = tMaxY; tMaxY += tDeltaY; vertical = false; }
 
         if (!g.inBounds(cx, cy)) return std::nullopt;
-        if (g.filled(cx, cy))    return Hit{ cx, cy, t, vertical };
+        if (g.filled(cx, cy)) {
+            Vec2 p = origin + direction * d;
+            float t = vertical ? p.y - std::floor(p.y) : p.x - std::floor(p.x);
+            if ((vertical && stepX < 0) || (!vertical && stepY > 0)) t = 1.0f - t;
+            return Hit{ cx, cy, d, vertical, t };
+        }
     }
     return std::nullopt;
 }
@@ -128,18 +162,22 @@ int main() {
     ImGui_ImplSDLRenderer3_Init(renderer);
 
     Grid grid(WORLD_WIDTH, WORLD_HEIGHT);
-    grid.at(1, 0) = 1;
-    grid.at(2, 0) = 1;
+    grid.at(7, 7) = 1;
+    grid.at(8, 7) = 2;
 
-    Vec2 currentPos{ 1.8f, 1.8f };
+    Vec2 currentPos = Vec2(8.8f, 10.8f);
+    Vec2 currentVelocity;
     float currentRotation = 0;
+    Vec2 currentDir;
 
     float moveSpeed = 1.0f;
-    float turnSpeedDeg = 50.0f;
+    float turnSpeedDeg = 100.0f;
 
     float horizontalFOV = 90.0f;
 
     Input input;
+
+    Texture wallTexture = *Texture::load("basalt.jpg");
 
     bool running = true;
     uint64_t t = 0;
@@ -157,13 +195,21 @@ int main() {
         }
         input.update();
 
-        if (input.held(SDL_SCANCODE_W)) currentPos.y -= moveSpeed * dt;
-        if (input.held(SDL_SCANCODE_A)) currentPos.x -= moveSpeed * dt;
-        if (input.held(SDL_SCANCODE_S)) currentPos.y += moveSpeed * dt;
-        if (input.held(SDL_SCANCODE_D)) currentPos.x += moveSpeed * dt;
-
         if (input.held(SDL_SCANCODE_RIGHT)) currentRotation += turnSpeedDeg * dt;
         if (input.held(SDL_SCANCODE_LEFT)) currentRotation -= turnSpeedDeg * dt;
+
+        currentDir = Vec2::fromAngle(degToRad(currentRotation));
+
+        Vec2 wishDir;
+        if (input.held(SDL_SCANCODE_W)) wishDir.y += 1;
+        if (input.held(SDL_SCANCODE_A)) wishDir.x += 1;
+        if (input.held(SDL_SCANCODE_S)) wishDir.y -= 1;
+        if (input.held(SDL_SCANCODE_D)) wishDir.x -= 1;
+        wishDir = WishDir(wishDir, currentDir);
+        currentVelocity = ApplyFriction(currentVelocity, 6.0f, 1.0f, dt);
+        currentVelocity = Accelerate(currentVelocity, wishDir, 2.0f, 10.0f, dt);
+        currentPos += currentVelocity * dt;
+
 
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
@@ -178,35 +224,45 @@ int main() {
         SDL_SetRenderDrawColor(renderer, 30, 30, 36, 255);
         SDL_RenderClear(renderer);
         
-        float angleIncrement = horizontalFOV / 1280;
-        for (size_t i = 0; i < 1280; i++)
+        float halfFovTan = std::tan(degToRad(horizontalFOV / 2));
+        float focal = (1280.0f / 2) / halfFovTan;
+        for (size_t c = 0; c < 1280; c++)
         {
-            float angle = (currentRotation - (horizontalFOV / 2)) + angleIncrement * i;
+            float screenX = 2.0f * (c + 0.5f) / 1280.0f - 1.0f;
+            float angle = currentRotation + radToDeg(std::atan(screenX * halfFovTan));
             Vec2 direction = Vec2::fromAngle(degToRad(angle));
 
-            if (auto hit = raycast(currentPos, direction, grid, 50.0f)) 
+            if (auto hit = raycast(currentPos, direction, grid, 50.0f))
             {
-                float perpDist = hit->t * std::cos(degToRad(angle - currentRotation));
-                int sizePixels = static_cast<int>(720.0f / perpDist);
+                float perpDist = hit->d * std::cos(degToRad(angle - currentRotation));
+                int sizePixels = static_cast<int>(focal / perpDist);
 
-                SDL_SetRenderDrawColor(renderer, 0, 0, 255 / hit->t, 255);
-                SDL_RenderLine(renderer, i, (720 - sizePixels) / 2, i, ((720 - sizePixels) / 2) + sizePixels);
+                //if (grid.at(hit->cx, hit->cy) == 1) SDL_SetRenderDrawColor(renderer, 0, 0, 255 / hit->d, 255);
+                //else if (grid.at(hit->cx, hit->cy) == 2) SDL_SetRenderDrawColor(renderer, 255 / hit->d, 0, 0, 255);
+                //SDL_RenderLine(renderer, i, (720 - sizePixels) / 2, i, ((720 - sizePixels) / 2) + sizePixels);
+                
+                for (size_t p = 0; p < sizePixels; p++)
+                {
+                    Vec2 texel{ hit->t, static_cast<float>(p) / static_cast<float>(sizePixels)};
+                    Color textureColorSample = wallTexture.sample(texel.x, texel.y) * (1/hit->d);
+                    SDL_SetRenderDrawColor(renderer, textureColorSample.r, textureColorSample.g, textureColorSample.b, textureColorSample.a);
+                    SDL_RenderPoint(renderer, c, p + (720 - sizePixels) / 2);
+                }
             }
         }
 
-/*
         for (int x = 0; x < WORLD_WIDTH; x++) {
             for (int y = 0; y < WORLD_HEIGHT; y++) {
                 if (grid.at(x, y) != 0) {
                     SDL_SetRenderDrawColor(renderer, 255, 100, 100, 255);
                 }
                 else {
-                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 50);
                 }
 
                 SDL_FRect rect;
-                rect.x = static_cast<float>(x) * TILE_SIZE + 1 * static_cast<float>(x);
-                rect.y = static_cast<float>(y) * TILE_SIZE + 1 * static_cast<float>(y);
+                rect.x = static_cast<float>(x) * TILE_SIZE;
+                rect.y = static_cast<float>(y) * TILE_SIZE;
                 rect.w = TILE_SIZE;
                 rect.h = TILE_SIZE;
                 SDL_RenderFillRect(renderer, &rect);
@@ -225,14 +281,13 @@ int main() {
         if (auto hit = raycast(currentPos, currentDir, grid, 50.0f)) {
             SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
             SDL_FRect tilrect;
-            tilrect.x = (currentPos.x + currentDir.x * hit->t) * TILE_SIZE - 4;
-            tilrect.y = (currentPos.y + currentDir.y * hit->t) * TILE_SIZE - 4;
+            tilrect.x = (currentPos.x + currentDir.x * hit->d) * TILE_SIZE - 4;
+            tilrect.y = (currentPos.y + currentDir.y * hit->d) * TILE_SIZE - 4;
             tilrect.w = 8;
             tilrect.h = 8;
-            float a = hit->t;
+            float a = hit->d;
             SDL_RenderRect(renderer, &tilrect);
         }
-*/
 
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);
