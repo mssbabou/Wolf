@@ -17,6 +17,9 @@
 #define WORLD_HEIGHT 16
 #define TILE_SIZE 16
 
+constexpr int screenWidth = 1280;
+constexpr int screenHeight = 720;
+
 struct Input {
     std::array<bool, SDL_SCANCODE_COUNT> prev{}, curr{};
 
@@ -108,9 +111,10 @@ struct Grid {
     bool filled(int x, int y) const { return at(x, y) != 0; }
 };
 
-struct Hit { int cx, cy; float d; bool hitVerticalWall; float t; };
+struct GridHit { int cx, cy; float d; bool hitVerticalWall; float t; };
+struct BillboardHit { int i; float d; float t; };
 
-std::optional<Hit> raycast(Vec2 origin, Vec2 direction, const Grid& g, float maxDist) {
+std::optional<GridHit> raycastGrid(Vec2 origin, Vec2 direction, const Grid& g, float maxDist) {
     int cx = (int)std::floor(origin.x), cy = (int)std::floor(origin.y);
     int stepX = direction.x > 0 ? 1 : -1;
     int stepY = direction.y > 0 ? 1 : -1;
@@ -132,7 +136,7 @@ std::optional<Hit> raycast(Vec2 origin, Vec2 direction, const Grid& g, float max
             Vec2 p = origin + direction * d;
             float t = vertical ? p.y - std::floor(p.y) : p.x - std::floor(p.x);
             if ((vertical && stepX < 0) || (!vertical && stepY > 0)) t = 1.0f - t;
-            return Hit{ cx, cy, d, vertical, t };
+            return GridHit{ cx, cy, d, vertical, t };
         }
     }
     return std::nullopt;
@@ -144,14 +148,14 @@ int main() {
         return 1;
     }
 
-    SDL_Window* window = SDL_CreateWindow("Ulvesteen", 1280, 720, SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Window* window = SDL_CreateWindow("Ulvesteen", screenWidth, screenHeight, SDL_WINDOW_HIGH_PIXEL_DENSITY);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, nullptr);
     if (!window || !renderer) {
         SDL_Log("Window/renderer failed: %s", SDL_GetError());
         return 1;
     }
 
-    SDL_Texture* tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, 1280, 720);
+    SDL_Texture* tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING, screenWidth, screenHeight);
     SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
 
     SDL_SetRenderVSync(renderer, 1);
@@ -186,7 +190,10 @@ int main() {
     textures[0] = *Texture::load("basalt.jpg");
     textures[1] = *Texture::load("gecko.jpg");
 
-    uint32_t* pixelBuffer = (uint32_t*)malloc(1280 * 720 * sizeof(uint32_t));
+    uint32_t* pixelBuffer = (uint32_t*)malloc(screenWidth * screenHeight * sizeof(uint32_t));
+
+    Vec2 billboardPos = Vec2(8.0f, 8.0f);
+    float billboardWidth = 1.0f;
 
     bool running = true;
     uint64_t t = 0;
@@ -233,26 +240,25 @@ int main() {
         SDL_SetRenderDrawColor(renderer, 30, 30, 36, 255);
         SDL_RenderClear(renderer);
 
-        memset(pixelBuffer, 0, 1280 * 720 * sizeof(uint32_t));
+        memset(pixelBuffer, 0, screenWidth * screenHeight * sizeof(uint32_t));
         
         float halfFovTan = std::tan(degToRad(horizontalFOV / 2));
-        float focal = (1280.0f / 2) / halfFovTan;
-        for (size_t c = 0; c < 1280; c++)
+        float focal = (screenWidth / 2.0f) / halfFovTan;
+        for (size_t c = 0; c < screenWidth; c++)
         {
-            float screenX = 2.0f * (c + 0.5f) / 1280.0f - 1.0f;
+            float screenX = 2.0f * (c + 0.5f) / screenWidth - 1.0f;
             float angle = currentRotation + radToDeg(std::atan(screenX * halfFovTan));
             Vec2 direction = Vec2::fromAngle(degToRad(angle));
 
-            if (auto hit = raycast(currentPos, direction, grid, 50.0f))
+            if (auto hit = raycastGrid(currentPos, direction, grid, 50.0f))
             {
                 float perpDist = hit->d * std::cos(degToRad(angle - currentRotation));
                 int sizePixels = static_cast<int>(focal / perpDist);
                 float sizePixelsFloat = static_cast<float>(sizePixels);
                 float distanceFalloff = 1 / hit->d;
-                int startOfColumn = (720 - sizePixels) / 2;
-                int start = (720 - sizePixels) / 2;
+                int start = (screenHeight - sizePixels) / 2;
                 int pBegin = std::max(0, -start);
-                int pEnd = std::min(sizePixels, 720 - start);
+                int pEnd = std::min(sizePixels, screenHeight - start);
                 Texture& texture = textures[grid.at(hit->cx, hit->cy) - 1];
 
                 for (int p = pBegin; p < pEnd; p++)
@@ -260,12 +266,12 @@ int main() {
                     int y = start + p;
                     Vec2 texel{ hit->t, static_cast<float>(p) / sizePixelsFloat };
                     Color textureColorSample = texture.sample(texel.x, texel.y) * distanceFalloff;
-                    pixelBuffer[y * 1280 + c] = textureColorSample.packed();
+                    pixelBuffer[y * screenWidth + c] = textureColorSample.packed();
                 }
             }
         }
 
-        SDL_UpdateTexture(tex, NULL, pixelBuffer, 1280 * sizeof(uint32_t));
+        SDL_UpdateTexture(tex, NULL, pixelBuffer, screenWidth * sizeof(uint32_t));
         SDL_RenderTexture(renderer, tex, NULL, NULL);
 
         for (int x = 0; x < WORLD_WIDTH; x++) {
@@ -295,7 +301,7 @@ int main() {
         SDL_RenderRect(renderer, &rect);
         SDL_RenderLine(renderer, currentPos.x * TILE_SIZE, currentPos.y * TILE_SIZE, currentPos.x * TILE_SIZE + currentDir.x * 128, currentPos.y * TILE_SIZE + currentDir.y * 128);
 
-        if (auto hit = raycast(currentPos, currentDir, grid, 50.0f)) {
+        if (auto hit = raycastGrid(currentPos, currentDir, grid, 50.0f)) {
             SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
             SDL_FRect tilrect;
             tilrect.x = (currentPos.x + currentDir.x * hit->d) * TILE_SIZE - 4;
@@ -304,6 +310,33 @@ int main() {
             tilrect.h = 8;
             float a = hit->d;
             SDL_RenderRect(renderer, &tilrect);
+        }
+
+        float r = degToRad(currentRotation);
+
+        Vec2 forward{ std::sin(r), -std::cos(r) };
+        Vec2 right{ std::cos(r),  std::sin(r) };
+
+        Vec2 d{ billboardPos.x - currentPos.x, billboardPos.y - currentPos.y };
+
+        float depth = d.x * forward.x + d.y * forward.y;
+        float side = d.x * right.x + d.y * right.y;
+
+        if (depth > 0.01f) {
+            const float focal = (screenWidth / 2.0f) / std::tan(degToRad(horizontalFOV) / 2.0f);
+
+            float screenX = (screenWidth / 2.0f) + (side / depth) * focal;
+            float screenY = (screenHeight / 2.0f);
+            float size = (billboardWidth / depth) * focal;
+
+            SDL_FRect billrect;
+            billrect.x = screenX - size / 2;
+            billrect.y = screenY - size / 2;
+            billrect.w = size;
+            billrect.h = size;
+
+            SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+            SDL_RenderRect(renderer, &billrect);
         }
 
         ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
