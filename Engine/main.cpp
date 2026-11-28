@@ -181,7 +181,10 @@ int main() {
 
     Input input;
 
-    Texture wallTexture = *Texture::load("basalt.jpg");
+    Texture textures[16];
+
+    textures[0] = *Texture::load("basalt.jpg");
+    textures[1] = *Texture::load("gecko.jpg");
 
     uint32_t* pixelBuffer = (uint32_t*)malloc(1280 * 720 * sizeof(uint32_t));
 
@@ -250,12 +253,13 @@ int main() {
                 int start = (720 - sizePixels) / 2;
                 int pBegin = std::max(0, -start);
                 int pEnd = std::min(sizePixels, 720 - start);
+                Texture& texture = textures[grid.at(hit->cx, hit->cy) - 1];
 
                 for (int p = pBegin; p < pEnd; p++)
                 {
                     int y = start + p;
                     Vec2 texel{ hit->t, static_cast<float>(p) / sizePixelsFloat };
-                    Color textureColorSample = wallTexture.sample(texel.x, texel.y) * distanceFalloff;
+                    Color textureColorSample = texture.sample(texel.x, texel.y) * distanceFalloff;
                     pixelBuffer[y * 1280 + c] = textureColorSample.packed();
                 }
             }
